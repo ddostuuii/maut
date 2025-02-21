@@ -1,0 +1,16 @@
+
+BOT_TOKEN=("7678781870:AAEdEokUHXR7fzyULq5oY7-dNXt3tcdo6vw")
+
+  
+OWNER_USERNAME=("@LDX_COBRA")
+
+  
+ADMIN_IDS=("7017469802")
+
+
+
+
+
+
+
+  
